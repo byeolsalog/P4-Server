@@ -1,8 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
-using System.Text;
-using System.IdentityModel.Tokens.Jwt;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<AppDbContext>(options =>
@@ -43,17 +44,21 @@ app.MapGet("/version/{platform}", async (string platform, AppDbContext db) =>
 });
 
 // 로그인
-app.MapPost("/login", async (TokenDto dto, AppDbContext db) =>
+app.MapPost("/login", async (TokenDto dto, AppDbContext db, IConfiguration config) =>
 {
     var handler = new JwtSecurityTokenHandler();
     try
     {
+        // Firebase ID 토큰 검증 (간단: 서명 확인 생략, 실제 운영시 Firebase 공개키 검증 필요)
         var token = handler.ReadJwtToken(dto.IdToken);
         var sub = token.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
-        var provider = token.Claims.FirstOrDefault(c => c.Type == "iss")?.Value ?? "unknown";
+        var iss = token.Claims.FirstOrDefault(c => c.Type == "iss")?.Value ?? "unknown";
+        var provider = iss.Contains("securetoken.google.com") ? "google" : "anonymous";
 
         if (string.IsNullOrEmpty(sub))
             return Results.BadRequest(new { ok = false, message = "Invalid token" });
+
+        var now = DateTime.UtcNow.AddHours(9); // 한국 시간
 
         // DB 조회
         var user = await db.Users.FirstOrDefaultAsync(u => u.ProviderSub == sub);
@@ -63,25 +68,50 @@ app.MapPost("/login", async (TokenDto dto, AppDbContext db) =>
             {
                 Provider = provider,
                 ProviderSub = sub,
-                DisplayName = $"User{sub[..6]}", // 임시 닉네임
-                CreatedAt = DateTime.UtcNow,
-                LastLogin = DateTime.UtcNow
+                DisplayName = NameGenerator.RandomName(6),
+                CreatedAt = now,
+                LastLogin = now
             };
             db.Users.Add(user);
         }
         else
         {
-            user.LastLogin = DateTime.UtcNow;
+            user.LastLogin = now;
         }
 
         await db.SaveChangesAsync();
+
+        // -------------------
+        // JWT 발급
+        // -------------------
+        var jwtKey = config["Jwt:Key"];
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var claims = new[]
+        {
+            new System.Security.Claims.Claim("userId", user.Id.ToString()),
+            new System.Security.Claims.Claim("displayName", user.DisplayName),
+            new System.Security.Claims.Claim("provider", user.Provider)
+        };
+
+        var jwt = new JwtSecurityToken(
+            issuer: config["Jwt:Issuer"] ?? "game-login",
+            audience: config["Jwt:Audience"] ?? "game-server",
+            claims: claims,
+            expires: now.AddHours(1), // 1시간짜리 토큰
+            signingCredentials: creds
+        );
+
+        var accessToken = handler.WriteToken(jwt);
 
         return Results.Ok(new
         {
             ok = true,
             message = "Login success",
             userId = user.Id,
-            displayName = user.DisplayName
+            displayName = user.DisplayName,
+            accessToken
         });
     }
     catch (Exception ex)
@@ -114,6 +144,18 @@ public static class PasswordHelper
     }
 }
 
+public static class NameGenerator
+{
+    private static readonly Random _rand = new();
+    private const string _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+    public static string RandomName(int length = 6)
+    {
+        return new string(Enumerable.Repeat(_chars, length)
+            .Select(s => s[_rand.Next(s.Length)]).ToArray());
+    }
+}
+
 
 // ------------------
 // DB 모델 정의
@@ -129,6 +171,9 @@ public class AppDbContext : DbContext
     {
         modelBuilder.Entity<AppVersion>().Property(v => v.Platform).HasConversion<string>();
         modelBuilder.Entity<User>().ToTable("AppUsers");
+        modelBuilder.Entity<User>().Property(u => u.Id).ValueGeneratedOnAdd();
+        modelBuilder.Entity<User>().ToTable("AppUsers");
+        modelBuilder.Entity<User>().HasAnnotation("MySql:ValueGenerationStrategy", MySql.EntityFrameworkCore.Metadata.MySQLValueGenerationStrategy.IdentityColumn);
     }
 }
 
