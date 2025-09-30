@@ -173,8 +173,6 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<AppVersion>().Property(v => v.Platform).HasConversion<string>();
         modelBuilder.Entity<User>().ToTable("AppUsers");
         modelBuilder.Entity<User>().Property(u => u.Id).ValueGeneratedOnAdd();
-        modelBuilder.Entity<User>().ToTable("AppUsers");
-        modelBuilder.Entity<User>().HasAnnotation("MySql:ValueGenerationStrategy", MySql.EntityFrameworkCore.Metadata.MySQLValueGenerationStrategy.IdentityColumn);
     }
 }
 
