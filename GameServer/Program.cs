@@ -12,16 +12,22 @@ using Netproto;
 
 class Program
 {
+    private const int Port = 5020;
+    private const int MaxPacketSize = 65536; // 64KB 제한 (원하는 크기로 조정 가능)
+
     static async Task Main(string[] args)
     {
-        var listener = new TcpListener(IPAddress.Any, 5020);
-        listener.Start();
-        Console.WriteLine("[GameServer] Listening on port 5020...");
+        var listener = new TcpListener(IPAddress.Any, Port);
+        listener.Start(100); // backlog 제한
+        Console.WriteLine($"[GameServer] Listening on port {Port}...");
 
         while (true)
         {
             var client = await listener.AcceptTcpClientAsync();
-            _ = HandleClientAsync(client); // fire & forget
+            Console.WriteLine("[GameServer] Client accepted");
+
+            // Task.Run으로 실행하여 CPU 폭주 방지
+            _ = Task.Run(() => HandleClientAsync(client));
         }
     }
 
@@ -37,9 +43,19 @@ class Program
                 // 1. 길이 프리픽스(4바이트) 읽기
                 byte[] lengthBuffer = new byte[4];
                 int read = await stream.ReadAsync(lengthBuffer, 0, 4);
-                if (read == 0) break;
+                if (read == 0) break; // 정상 종료
+                if (read < 4)
+                {
+                    Console.WriteLine("[GameServer] Invalid header received");
+                    break;
+                }
 
                 int length = BinaryPrimitives.ReadInt32LittleEndian(lengthBuffer);
+                if (length <= 0 || length > MaxPacketSize)
+                {
+                    Console.WriteLine($"[GameServer] Invalid packet length: {length}");
+                    break;
+                }
 
                 // 2. 본문 읽기
                 byte[] buffer = new byte[length];
@@ -47,7 +63,11 @@ class Program
                 while (offset < length)
                 {
                     int r = await stream.ReadAsync(buffer, offset, length - offset);
-                    if (r <= 0) throw new Exception("클라이언트 연결 끊김");
+                    if (r <= 0)
+                    {
+                        Console.WriteLine("[GameServer] Client disconnected unexpectedly");
+                        return;
+                    }
                     offset += r;
                 }
 
@@ -78,6 +98,10 @@ class Program
 
                     await stream.WriteAsync(lengthPrefix, 0, 4);
                     await stream.WriteAsync(data, 0, data.Length);
+                }
+                else
+                {
+                    Console.WriteLine($"[GameServer] Unknown packet type: {envelope.Type}");
                 }
             }
         }
