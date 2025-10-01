@@ -122,7 +122,7 @@ app.MapPost("/login", async (TokenDto dto, AppDbContext db, IConfiguration confi
     }
 });
 
-app.Run();
+app.Run("http://0.0.0.0:5000");
 
 public enum PlatformType
 {
