@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using MySql.Data.MySqlClient;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.UseKestrel().ConfigureKestrel((context, options) => { options.Configure(context.Configuration.GetSection("Kestrel")); });
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMySql(
         builder.Configuration.GetConnectionString("DefaultConnection"),
